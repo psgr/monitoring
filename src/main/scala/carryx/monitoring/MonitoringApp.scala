@@ -2,6 +2,7 @@ package carryx.monitoring
 
 import akka.actor._
 import akka.io.IO
+import org.joda.time.DateTime
 import play.api.libs.json.Json
 import spray.can.Http
 import spray.http.ContentTypes._
@@ -24,18 +25,22 @@ class Listener extends Actor {
 
   import context.system
 
+  var errors: Int = 0
+
   override def receive: Receive = {
     case _: Http.Connected =>
       sender() ! Http.Register(self)
 
     case HttpRequest(GET, Uri.Path("/"), _, _, _) =>
-      sender() ! HttpResponse(entity = "Hello consul! I'm ok")
+      sender() ! HttpResponse(entity = s"Hello consul! I'm ok, got $errors error pings, now "+DateTime.now())
 
     case HttpRequest(GET, Uri.Path(uri), _, _, _) =>
       val s = uri.drop(1)
       context.child(s).getOrElse(context.actorOf(Props(classOf[ErrorThrottle], 1 minute, 4, System.getProperty("token", "93317bef88fb244e76a012d20484dbdc")), s)) ! ErrorThrottle
 
       sender() ! HttpResponse(entity = "Got it")
+
+      errors += 1
   }
 
   IO(Http) ! Http.Bind(self, interface = System.getProperty("host", "localhost"), port = 8186)
