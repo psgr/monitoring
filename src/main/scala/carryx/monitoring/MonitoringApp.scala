@@ -1,13 +1,14 @@
 package carryx.monitoring
 
 import akka.actor._
-import akka.io.IO
-import org.joda.time.DateTime
+import akka.http.scaladsl.Http
+import akka.http.scaladsl.model.ContentTypes.`application/json`
+import akka.http.scaladsl.model.HttpMethods.POST
+import akka.http.scaladsl.model._
+import akka.http.scaladsl.server.Directives
+import akka.pattern.ask
+import akka.stream.ActorFlowMaterializer
 import play.api.libs.json.Json
-import spray.can.Http
-import spray.http.ContentTypes._
-import spray.http.HttpMethods._
-import spray.http.{HttpEntity, HttpRequest, HttpResponse, Uri}
 
 import scala.concurrent.duration._
 
@@ -15,40 +16,74 @@ import scala.concurrent.duration._
  * @author alari
  * @since 9/3/14
  */
-object MonitoringApp extends App {
+object MonitoringApp extends App with Directives {
   implicit val system = ActorSystem("monitoring")
+  implicit val executor = system.dispatcher
+  implicit val materializer = ActorFlowMaterializer()
+  implicit val timeout = akka.util.Timeout(1, SECONDS)
 
-  val listener: ActorRef = system.actorOf(Props[Listener], "listener")
+  val serviceHandler = system.actorOf(Props[ServiceHandler], "service-handler")
+
+  val routes =
+    (get & path(Segment)) { s =>
+      ctx =>
+        println(s"GOT ERROR $s")
+        for {
+          ServiceHandler.ErrorAck <- serviceHandler ? ServiceHandler.TriggerError(s)
+          r <- ctx.complete(s"Got it for $s!")
+        } yield r
+    } ~ get {
+      ctx =>
+        println("GOT STATS REQUEST")
+        for {
+          ServiceHandler.Stats(e) <- serviceHandler ? ServiceHandler.GetStats
+          r <- ctx.complete(s"Hello consul! I got $e errors")
+        } yield r
+    }
+
+  Http(system).bindAndHandle(routes, interface = System.getProperty("host", "localhost"), port = 8186).foreach(r => println("Bound "+r))
 }
 
-class Listener extends Actor {
+class ServiceHandler extends Actor {
 
-  import context.system
+  import ServiceHandler._
 
   var errors: Int = 0
 
   override def receive: Receive = {
-    case _: Http.Connected =>
-      sender() ! Http.Register(self)
+    case GetStats =>
+      sender() ! Stats(errors)
 
-    case HttpRequest(GET, Uri.Path("/"), _, _, _) =>
-      sender() ! HttpResponse(entity = s"Hello consul! I'm ok, got $errors error pings, now "+DateTime.now())
+    case TriggerError(s) =>
+      context.child(s).getOrElse(context.actorOf(Props(classOf[ErrorThrottle], 10 minutes, 8, System.getProperty("token", "93317bef88fb244e76a012d20484dbdc")), s)) ! ErrorThrottle
 
-    case HttpRequest(GET, Uri.Path(uri), _, _, _) =>
-      val s = uri.drop(1)
-      context.child(s).getOrElse(context.actorOf(Props(classOf[ErrorThrottle], 1 minute, 4, System.getProperty("token", "93317bef88fb244e76a012d20484dbdc")), s)) ! ErrorThrottle
-
-      sender() ! HttpResponse(entity = "Got it")
+      sender() ! ErrorAck
 
       errors += 1
   }
 
-  IO(Http) ! Http.Bind(self, interface = System.getProperty("host", "localhost"), port = 8186)
 }
 
-class ErrorThrottle(timeout: FiniteDuration, limit: Int, token: String) extends Actor {
+object ServiceHandler {
+
+  sealed trait Command
+
+  case object GetStats extends Command
+
+  case class Stats(errors: Int)
+
+  case class TriggerError(service: String) extends Command
+
+  case object ErrorAck
+
+}
+
+
+class ErrorThrottle(timeout: FiniteDuration, limit: Int, token: String) extends Actor with ActorLogging {
   context.setReceiveTimeout(timeout)
+
   import context.system
+  import context.dispatcher
 
   val service = self.path.name
 
@@ -56,20 +91,26 @@ class ErrorThrottle(timeout: FiniteDuration, limit: Int, token: String) extends 
 
   def escalate(repeat: Int = 1) = {
 
-    IO(Http) ! HttpRequest(POST, Uri(s"https://api.flowdock.com/v1/messages/team_inbox/$token"), entity = HttpEntity(`application/json`, Json.obj(
+    import MonitoringApp.materializer
+
+    Http(system) singleRequest HttpRequest(POST, Uri(s"https://api.flowdock.com/v1/messages/team_inbox/$token"), entity = HttpEntity(`application/json`, Json.obj(
       "source" -> "Monitoring",
       "from_address" -> "noreply@carryx.com",
       "subject" -> s"$service is not stable",
       "content" -> s"Escalating instability for $service (triggered $repeat times without $timeout of silence)",
       "tags" -> Seq(service, "monitoring", "error")
-    ).toString()))
+    ).toString())) foreach {resp =>
+      log.info(s"Escalated $service to inbox: {}", resp)
+    }
 
-    if(repeat == 1) {
-      IO(Http) ! HttpRequest(POST, Uri(s"https://api.flowdock.com/v1/messages/chat/$token"), entity = HttpEntity(`application/json`, Json.obj(
+    if (repeat == 1) {
+      Http(system) singleRequest HttpRequest(POST, Uri(s"https://api.flowdock.com/v1/messages/chat/$token"), entity = HttpEntity(`application/json`, Json.obj(
         "external_user_name" -> "Monitoring",
         "content" -> s"@Mitya! Escalating instability for $service (triggered $repeat times without $timeout of silence)",
         "tags" -> Seq(service, "monitoring", "error")
-      ).toString()))
+      ).toString())) foreach {resp =>
+        log.info(s"Escalated $service to chat: {}", resp)
+      }
     }
 
   }

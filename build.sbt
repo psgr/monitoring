@@ -6,19 +6,19 @@ name := "monitoring"
 
 version := "1.0-SNAPSHOT"
 
-scalaVersion := "2.11.2"
+scalaVersion := "2.11.6"
 
-sbtVersion := "0.13.5"
+sbtVersion := "0.13.8"
 
 libraryDependencies ++= {
-  val akkaV = "2.3.5"
-  val sprayV = "1.3.1"
+  val akkaV = "2.3.11"
+  val akkaHttpV = "1.0-RC2"
   Seq(
-    "io.spray" %% "spray-can" % sprayV,
+    "com.typesafe.akka" %% "akka-http-scala-experimental" % akkaHttpV,
     "com.typesafe.akka" %% "akka-actor" % akkaV,
     "com.typesafe.akka" %% "akka-slf4j" % akkaV,
     "com.typesafe" % "config" % "1.2.1",
-    "com.typesafe.play" %% "play-json" % "2.3.0",
+    "com.typesafe.play" %% "play-json" % "2.3.9",
     "ch.qos.logback" % "logback-classic" % "1.1.2",
     "net.logstash.logback" % "logstash-logback-encoder" % "2.8",
     "org.specs2" %% "specs2" % "2.3.12" % "test")
