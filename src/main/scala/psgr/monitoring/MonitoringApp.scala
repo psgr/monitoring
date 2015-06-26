@@ -1,4 +1,4 @@
-package carryx.monitoring
+package psgr.monitoring
 
 import akka.actor._
 import akka.http.scaladsl.Http
@@ -7,7 +7,7 @@ import akka.http.scaladsl.model.HttpMethods.POST
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.server.Directives
 import akka.pattern.ask
-import akka.stream.ActorFlowMaterializer
+import akka.stream.ActorMaterializer
 import play.api.libs.json.Json
 
 import scala.concurrent.duration._
@@ -19,7 +19,7 @@ import scala.concurrent.duration._
 object MonitoringApp extends App with Directives {
   implicit val system = ActorSystem("monitoring")
   implicit val executor = system.dispatcher
-  implicit val materializer = ActorFlowMaterializer()
+  implicit val materializer = ActorMaterializer()
   implicit val timeout = akka.util.Timeout(1, SECONDS)
 
   val serviceHandler = system.actorOf(Props[ServiceHandler], "service-handler")
@@ -41,7 +41,7 @@ object MonitoringApp extends App with Directives {
         } yield r
     }
 
-  Http(system).bindAndHandle(routes, interface = System.getProperty("host", "localhost"), port = 8186).foreach(r => println("Bound "+r))
+  Http(system).bindAndHandle(routes, interface = System.getProperty("host", "localhost"), port = 8186).foreach(r => println("Bound " + r))
 }
 
 class ServiceHandler extends Actor {
@@ -82,8 +82,7 @@ object ServiceHandler {
 class ErrorThrottle(timeout: FiniteDuration, limit: Int, token: String) extends Actor with ActorLogging {
   context.setReceiveTimeout(timeout)
 
-  import context.system
-  import context.dispatcher
+  import context.{dispatcher, system}
 
   val service = self.path.name
 
@@ -99,7 +98,7 @@ class ErrorThrottle(timeout: FiniteDuration, limit: Int, token: String) extends 
       "subject" -> s"$service is not stable",
       "content" -> s"Escalating instability for $service (triggered $repeat times without $timeout of silence)",
       "tags" -> Seq(service, "monitoring", "error")
-    ).toString())) foreach {resp =>
+    ).toString())) foreach { resp =>
       log.info(s"Escalated $service to inbox: {}", resp)
     }
 
@@ -108,7 +107,7 @@ class ErrorThrottle(timeout: FiniteDuration, limit: Int, token: String) extends 
         "external_user_name" -> "Monitoring",
         "content" -> s"@Mitya! Escalating instability for $service (triggered $repeat times without $timeout of silence)",
         "tags" -> Seq(service, "monitoring", "error")
-      ).toString())) foreach {resp =>
+      ).toString())) foreach { resp =>
         log.info(s"Escalated $service to chat: {}", resp)
       }
     }
