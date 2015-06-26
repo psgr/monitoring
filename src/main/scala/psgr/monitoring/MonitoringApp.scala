@@ -1,6 +1,7 @@
 package psgr.monitoring
 
 import akka.actor._
+import akka.event.slf4j.Logger
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ContentTypes.`application/json`
 import akka.http.scaladsl.model.HttpMethods.POST
@@ -24,20 +25,25 @@ object MonitoringApp extends App with Directives {
 
   val serviceHandler = system.actorOf(Props[ServiceHandler], "service-handler")
 
+  val launched = DateTime.now
+  lazy val log = Logger(this.getClass, this.getClass.getSimpleName)
+
+  log.info("Now: "+launched.toIsoDateTimeString())
+
   val routes =
     (get & path(Segment)) { s =>
       ctx =>
-        println(s"GOT ERROR $s")
+        log.info(s"GOT ERROR $s")
         for {
           ServiceHandler.ErrorAck <- serviceHandler ? ServiceHandler.TriggerError(s)
           r <- ctx.complete(s"Got it for $s!")
         } yield r
     } ~ get {
       ctx =>
-        println("GOT STATS REQUEST")
+        log.info("GOT STATS REQUEST")
         for {
           ServiceHandler.Stats(e) <- serviceHandler ? ServiceHandler.GetStats
-          r <- ctx.complete(s"Hello consul! I got $e errors")
+          r <- ctx.complete(s"Hello consul! I got $e errors, launched "+launched.toIsoDateTimeString())
         } yield r
     }
 
